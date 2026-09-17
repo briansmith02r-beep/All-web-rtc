@@ -1,29 +1,31 @@
-name: Build WebRTC Android
+name: Build WebRTC Android - All ABIs
 
 on:
   workflow_dispatch:
 
 jobs:
-
   build:
-    name: Build ${{ matrix.arch }}
+    name: Build WebRTC Universal AAR
     runs-on: ubuntu-24.04
 
-    strategy:
-      fail-fast: false
-      matrix:
-        arch:
-          - arm64-v8a
-          - armeabi-v7a
-          - x86
-          - x86_64
-
     steps:
+
+      # ---------------------------------------------------------
+      # 1. Install dependencies
+      # ---------------------------------------------------------
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git python3 curl unzip
+          sudo apt-get install -y \
+            git \
+            python3 \
+            curl \
+            unzip \
+            zip
 
+      # ---------------------------------------------------------
+      # 2. Install depot_tools
+      # ---------------------------------------------------------
       - name: Install depot_tools
         run: |
           git clone --depth 1 \
@@ -31,19 +33,27 @@ jobs:
             "$HOME/depot_tools"
 
           echo "$HOME/depot_tools" >> "$GITHUB_PATH"
+
           export PATH="$HOME/depot_tools:$PATH"
 
           gclient --version
 
+      # ---------------------------------------------------------
+      # 3. Fetch WebRTC - ONLY ONCE
+      # ---------------------------------------------------------
       - name: Fetch WebRTC
         run: |
           export PATH="$HOME/depot_tools:$PATH"
 
           mkdir -p "$GITHUB_WORKSPACE/webrtc"
+
           cd "$GITHUB_WORKSPACE/webrtc"
 
           fetch --nohooks --no-history webrtc_android
 
+      # ---------------------------------------------------------
+      # 4. Sync dependencies - ONLY ONCE
+      # ---------------------------------------------------------
       - name: Sync dependencies
         run: |
           export PATH="$HOME/depot_tools:$PATH"
@@ -52,81 +62,139 @@ jobs:
 
           gclient sync --no-history
 
-      - name: Build AAR
+      # ---------------------------------------------------------
+      # 5. Build ARM64
+      # ---------------------------------------------------------
+      - name: Build ARM64
         run: |
           export PATH="$HOME/depot_tools:$PATH"
 
           cd "$GITHUB_WORKSPACE/webrtc/src"
 
           vpython3 tools_webrtc/android/build_aar.py \
-            --build-dir "$GITHUB_WORKSPACE/webrtc/src/out/${{ matrix.arch }}" \
-            --output "$GITHUB_WORKSPACE/libwebrtc-${{ matrix.arch }}.aar" \
-            --arch "${{ matrix.arch }}"
+            --build-dir "$GITHUB_WORKSPACE/webrtc/src/out/arm64" \
+            --output "$GITHUB_WORKSPACE/arm64.aar" \
+            --arch arm64-v8a
 
-      - name: Upload ABI AAR
-        uses: actions/upload-artifact@v4
-        with:
-          name: aar-${{ matrix.arch }}
-          path: libwebrtc-${{ matrix.arch }}.aar
-
-
-  merge:
-    name: Create universal AAR
-    needs: build
-    runs-on: ubuntu-24.04
-
-    steps:
-
-      - name: Download ARM64 AAR
-        uses: actions/download-artifact@v4
-        with:
-          name: aar-arm64-v8a
-          path: arm64
-
-      - name: Download ARMv7 AAR
-        uses: actions/download-artifact@v4
-        with:
-          name: aar-armeabi-v7a
-          path: armeabi
-
-      - name: Download x86 AAR
-        uses: actions/download-artifact@v4
-        with:
-          name: aar-x86
-          path: x86
-
-      - name: Download x86_64 AAR
-        uses: actions/download-artifact@v4
-        with:
-          name: aar-x86_64
-          path: x86_64
-
-      - name: Install unzip
+      # ---------------------------------------------------------
+      # 6. Build ARMv7
+      # ---------------------------------------------------------
+      - name: Build ARMv7
         run: |
-          sudo apt-get update
-          sudo apt-get install -y unzip zip
+          export PATH="$HOME/depot_tools:$PATH"
 
-      - name: Merge AARs
+          cd "$GITHUB_WORKSPACE/webrtc/src"
+
+          vpython3 tools_webrtc/android/build_aar.py \
+            --build-dir "$GITHUB_WORKSPACE/webrtc/src/out/armv7" \
+            --output "$GITHUB_WORKSPACE/armeabi-v7a.aar" \
+            --arch armeabi-v7a
+
+      # ---------------------------------------------------------
+      # 7. Build x86
+      # ---------------------------------------------------------
+      - name: Build x86
         run: |
+          export PATH="$HOME/depot_tools:$PATH"
+
+          cd "$GITHUB_WORKSPACE/webrtc/src"
+
+          vpython3 tools_webrtc/android/build_aar.py \
+            --build-dir "$GITHUB_WORKSPACE/webrtc/src/out/x86" \
+            --output "$GITHUB_WORKSPACE/x86.aar" \
+            --arch x86
+
+      # ---------------------------------------------------------
+      # 8. Build x86_64
+      # ---------------------------------------------------------
+      - name: Build x86_64
+        run: |
+          export PATH="$HOME/depot_tools:$PATH"
+
+          cd "$GITHUB_WORKSPACE/webrtc/src"
+
+          vpython3 tools_webrtc/android/build_aar.py \
+            --build-dir "$GITHUB_WORKSPACE/webrtc/src/out/x86_64" \
+            --output "$GITHUB_WORKSPACE/x86_64.aar" \
+            --arch x86_64
+
+      # ---------------------------------------------------------
+      # 9. Merge all ABIs
+      # ---------------------------------------------------------
+      - name: Merge all ABIs into one AAR
+        run: |
+          set -e
+
+          rm -rf universal
           mkdir -p universal
 
-          unzip -q arm64/libwebrtc-arm64-v8a.aar -d universal
+          # Use ARM64 AAR as the base.
+          unzip -q "$GITHUB_WORKSPACE/arm64.aar" \
+            -d universal
 
-          unzip -q armeabi/libwebrtc-armeabi-v7a.aar -d armeabi_tmp
-          unzip -q x86/libwebrtc-x86.aar -d x86_tmp
-          unzip -q x86_64/libwebrtc-x86_64.aar -d x86_64_tmp
+          # Extract other AARs.
+          mkdir -p tmp_armv7
+          mkdir -p tmp_x86
+          mkdir -p tmp_x86_64
 
+          unzip -q "$GITHUB_WORKSPACE/armeabi-v7a.aar" \
+            -d tmp_armv7
+
+          unzip -q "$GITHUB_WORKSPACE/x86.aar" \
+            -d tmp_x86
+
+          unzip -q "$GITHUB_WORKSPACE/x86_64.aar" \
+            -d tmp_x86_64
+
+          # Make sure JNI directory exists.
           mkdir -p universal/jni
 
-          cp -r armeabi_tmp/jni/armeabi-v7a universal/jni/
-          cp -r x86_tmp/jni/x86 universal/jni/
-          cp -r x86_64_tmp/jni/x86_64 universal/jni/
+          # Copy ARMv7.
+          if [ -d "tmp_armv7/jni/armeabi-v7a" ]; then
+            cp -r \
+              tmp_armv7/jni/armeabi-v7a \
+              universal/jni/
+          fi
 
+          # Copy x86.
+          if [ -d "tmp_x86/jni/x86" ]; then
+            cp -r \
+              tmp_x86/jni/x86 \
+              universal/jni/
+          fi
+
+          # Copy x86_64.
+          if [ -d "tmp_x86_64/jni/x86_64" ]; then
+            cp -r \
+              tmp_x86_64/jni/x86_64 \
+              universal/jni/
+          fi
+
+          # Re-create the AAR.
           cd universal
-          zip -r ../libwebrtc.aar .
 
+          zip -r "$GITHUB_WORKSPACE/libwebrtc-universal.aar" .
+
+      # ---------------------------------------------------------
+      # 10. Verify AAR
+      # ---------------------------------------------------------
+      - name: Verify AAR
+        run: |
+          echo "===== AAR contents ====="
+
+          unzip -l "$GITHUB_WORKSPACE/libwebrtc-universal.aar"
+
+          echo ""
+          echo "===== ABI directories ====="
+
+          unzip -l "$GITHUB_WORKSPACE/libwebrtc-universal.aar" \
+            | grep "jni/" || true
+
+      # ---------------------------------------------------------
+      # 11. Upload final AAR
+      # ---------------------------------------------------------
       - name: Upload Universal AAR
         uses: actions/upload-artifact@v4
         with:
           name: libwebrtc-universal
-          path: libwebrtc.aar
+          path: libwebrtc-universal.aar
