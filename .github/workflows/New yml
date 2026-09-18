@@ -1,4 +1,4 @@
-name: Build WebRTC Android - All ABIs
+name: Build WebRTC Android - All
 
 on:
   workflow_dispatch:
